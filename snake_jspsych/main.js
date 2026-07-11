@@ -426,7 +426,7 @@ const practice_trial = {
 // const practice_feedback = { ... };
 
 // Create experimental trials loop structure
-const GOAL_SCORE = 1500;
+const GOAL_SCORE = 2000;
 const MAX_TIME_MINUTES = 60;
 const MAX_TIME_MS = MAX_TIME_MINUTES * 60 * 1000;
 let experimentStartTime = null;

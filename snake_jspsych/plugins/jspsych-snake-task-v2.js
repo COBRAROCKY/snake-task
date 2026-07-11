@@ -289,6 +289,10 @@ var jsPsychSnakeTask = (function (jspsych) {
       
       // 撞墙提示
       this.isCrashed = false;
+      
+      // 无敌机制：move阶段前2秒处于无敌状态
+      this.invincibleUntil = 0;          // 无敌状态截止时间戳（0=不无敌）
+      this.INVINCIBLE_DURATION = 2000;   // 无敌持续时长（毫秒）
     }
 
     start() {
@@ -456,7 +460,7 @@ var jsPsychSnakeTask = (function (jspsych) {
       // 实验设计: 生成20个灌木丛位置，每个象限5个
       // 最小间距调整为确保能生成足够的草丛
       const points = [];
-      const minSpacing = this.GRID_SIZE * 2.0; // 放宽间距确保每象限能生成5个草丛
+      const minSpacing = this.GRID_SIZE * 4.0; // 放宽至160px间距，降低小学生误触概率
       
       const centerX = this.CANVAS_WIDTH / 2;
       const centerY = this.CANVAS_HEIGHT / 2;
@@ -997,6 +1001,9 @@ var jsPsychSnakeTask = (function (jspsych) {
         this._moveStartTime = performance.now();
         this._directionChanges = 0;
         
+        // 设置无敌状态：move阶段前2秒内撞墙/撞自身/碰草丛不触发死亡和扣分
+        this.invincibleUntil = performance.now() + this.INVINCIBLE_DURATION;
+        
         // Activate special food (grapes) logic
         if (this.hasSpecialFood && this.specialFoodT === 1 && this.grapesList.length > 0) {
             this.specialFoodActive = true;
@@ -1084,8 +1091,11 @@ var jsPsychSnakeTask = (function (jspsych) {
     checkCollisions() {
       const head = this.snake[0];
       
+      // 检查当前是否处于无敌状态（move阶段前2秒）
+      const isInvincible = this.invincibleUntil > 0 && performance.now() < this.invincibleUntil;
+      
       // 1. Wall Collision - 参考 template.py，直接进入下一轮
-      if (head.x < 0 || head.x >= this.CANVAS_WIDTH || head.y < 0 || head.y >= this.CANVAS_HEIGHT) {
+      if (!isInvincible && (head.x < 0 || head.x >= this.CANVAS_WIDTH || head.y < 0 || head.y >= this.CANVAS_HEIGHT)) {
         this.playSound('crash');
         this.gameOver = true;
         this.isCrashed = true; // 标记为撞墙状态
@@ -1098,17 +1108,23 @@ var jsPsychSnakeTask = (function (jspsych) {
       }
       
       // 2. Self Collision - 参考 template.py，直接进入下一轮
-      for (let i = 1; i < this.snake.length; i++) {
-        if (head.x === this.snake[i].x && head.y === this.snake[i].y) {
-          this.playSound('crash');
-          this.gameOver = true;
-          this.endTrial('self_collision');
-          return;
+      // 无敌状态下跳过自身碰撞检测
+      if (!isInvincible) {
+        for (let i = 1; i < this.snake.length; i++) {
+          if (head.x === this.snake[i].x && head.y === this.snake[i].y) {
+            this.playSound('crash');
+            this.gameOver = true;
+            this.endTrial('self_collision');
+            return;
+          }
         }
       }
       
       // 3. Food Collision (Target Food)
-      const foodIdx = this.targetFoods.findIndex(f => f.x === head.x && f.y === head.y);
+      // 放宽苹果拾取判定：蛇头在苹果所在格子的3x3区域（含自身共9格）即判定吃到
+      const foodIdx = this.targetFoods.findIndex(f => 
+        Math.abs(head.x - f.x) <= this.GRID_SIZE && Math.abs(head.y - f.y) <= this.GRID_SIZE
+      );
       if (foodIdx !== -1) {
         // 使用绝对时间（从页面加载开始）
         const currentTime = performance.now();
@@ -1229,7 +1245,7 @@ var jsPsychSnakeTask = (function (jspsych) {
       // If hitting a bush that contains NO food
       const isBush = this.bushLocations.some(b => b.x === head.x && b.y === head.y);
       // We already checked Target and Special food. So if isBush is true here, it's an empty bush.
-      if (isBush) {
+      if (!isInvincible && isBush) {
          this.score -= 1;
          this.totalScore -= 1;
          this.playSound('error');
@@ -1325,12 +1341,18 @@ var jsPsychSnakeTask = (function (jspsych) {
          this.ctx.textAlign = 'center';
          this.ctx.fillText(`冻结: ${(remainingMs/1000).toFixed(1)}秒`, this.snake[0].x + this.GRID_SIZE/2, this.snake[0].y - 10);
       } else {
-         // Draw Body (2.2° × 4.4° rectangles)
-         for (let i = 1; i < this.snake.length; i++) {
-           this.drawSnakeBody(this.snake[i].x, this.snake[i].y, i);
+         // 无敌状态闪烁效果：move阶段前2秒整条蛇交替显示/隐藏
+         const isInvincible = this.phase === 'move' && this.invincibleUntil > 0 && performance.now() < this.invincibleUntil;
+         const blinkPhase = isInvincible ? Math.floor(performance.now() / 150) % 2 : 0;
+         
+         if (!isInvincible || blinkPhase === 0) {
+           // Draw Body (2.2° × 4.4° rectangles)
+           for (let i = 1; i < this.snake.length; i++) {
+             this.drawSnakeBody(this.snake[i].x, this.snake[i].y, i);
+           }
+           // Draw Head (rotated based on direction)
+           this.drawSnakeHead(this.snake[0].x, this.snake[0].y);
          }
-         // Draw Head (rotated based on direction)
-         this.drawSnakeHead(this.snake[0].x, this.snake[0].y);
       }
       
       // 显示苹果核（错误位置）- 在蛇之后绘制，这样不会被蛇覆盖
