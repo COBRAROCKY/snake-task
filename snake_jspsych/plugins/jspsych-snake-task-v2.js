@@ -276,6 +276,9 @@ var jsPsychSnakeTask = (function (jspsych) {
       // 防止endTrial重复调用
       this.trialEnded = false;
       
+      // 苹果拾取后草丛豁免（防止头经过时误触发错误位置惩罚）
+      this._eatenFoodPos = null;
+      
       // 分数变化显示（跟随蛇头，类似Python版本）
       this.scoreChangeText = null;      // 显示的文字，如 "+3" 或 "-1"
       this.scoreChangeColor = null;     // 文字颜色
@@ -1170,6 +1173,8 @@ var jsPsychSnakeTask = (function (jspsych) {
         
         // Eat Food
         const food = this.targetFoods.splice(foodIdx, 1)[0];
+        // 记录刚吃的苹果位置，下一帧草丛检测时豁免该位置（防止头经过时触发错误位置惩罚）
+        this._eatenFoodPos = { x: food.x, y: food.y };
         const pointsEarned = 1 + this.scoreBonus;
         this.score += pointsEarned;
         this.totalScore += pointsEarned;
@@ -1282,8 +1287,13 @@ var jsPsychSnakeTask = (function (jspsych) {
       // 5. Bush (Wrong Location) Collision
       // If hitting a bush that contains NO food
       const isBush = this.bushLocations.some(b => b.x === head.x && b.y === head.y);
+      // 检查是否刚吃了这个位置的苹果（豁免草丛惩罚）
+      const justAteHere = this._eatenFoodPos && this._eatenFoodPos.x === head.x && this._eatenFoodPos.y === head.y;
+      if (justAteHere) {
+        this._eatenFoodPos = null; // 仅豁免一帧
+      }
       // We already checked Target and Special food. So if isBush is true here, it's an empty bush.
-      if (!isInvincible && isBush) {
+      if (!isInvincible && isBush && !justAteHere) {
          this.score -= 1;
          this.totalScore -= 1;
          this.playSound('error');
