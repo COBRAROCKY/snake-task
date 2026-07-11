@@ -460,7 +460,7 @@ var jsPsychSnakeTask = (function (jspsych) {
       // 实验设计: 生成20个灌木丛位置，每个象限5个
       // 最小间距调整为确保能生成足够的草丛
       const points = [];
-      const minSpacing = this.GRID_SIZE * 4.0; // 放宽至160px间距，降低小学生误触概率
+      const minSpacing = this.GRID_SIZE * 3.0; // 120px间距
       
       const centerX = this.CANVAS_WIDTH / 2;
       const centerY = this.CANVAS_HEIGHT / 2;
