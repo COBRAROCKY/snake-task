@@ -276,7 +276,7 @@ var jsPsychSnakeTask = (function (jspsych) {
       // 防止endTrial重复调用
       this.trialEnded = false;
       
-      // 吃苹果后草丛单帧豁免
+      // 吃苹果后草丛1秒豁免（位置和时间戳）
       this._eatenFoodPos = null;
       
       // 分数变化显示（跟随蛇头，类似Python版本）
@@ -1132,9 +1132,12 @@ var jsPsychSnakeTask = (function (jspsych) {
     checkCollisions() {
       const head = this.snake[0];
       
-      // 保存上一帧吃苹果的豁免位置，并立即清空（保证仅豁免一帧）
+      // 检查上一帧吃苹果的豁免位置是否仍在1秒有效期内
       const lastEatenPos = this._eatenFoodPos;
-      this._eatenFoodPos = null;
+      if (lastEatenPos && performance.now() - lastEatenPos.time > 1000) {
+        // 超过1秒，清除豁免
+        this._eatenFoodPos = null;
+      }
       
       // 检查当前是否处于无敌状态（move阶段前2秒）
       const isInvincible = this.invincibleUntil > 0 && performance.now() < this.invincibleUntil;
@@ -1177,8 +1180,8 @@ var jsPsychSnakeTask = (function (jspsych) {
         
         // Eat Food
         const food = this.targetFoods.splice(foodIdx, 1)[0];
-        // 标记该草丛下一帧豁免（防止3×3拾取后蛇头经过时误冻结）
-        this._eatenFoodPos = { x: food.x, y: food.y };
+        // 标记该草丛1秒内豁免（防止3×3拾取后蛇头经过时误冻结）
+        this._eatenFoodPos = { x: food.x, y: food.y, time: performance.now() };
         const pointsEarned = 1 + this.scoreBonus;
         this.score += pointsEarned;
         this.totalScore += pointsEarned;
@@ -1290,7 +1293,7 @@ var jsPsychSnakeTask = (function (jspsych) {
       
       // 5. Bush (Wrong Location) Collision
       const isBush = this.bushLocations.some(b => b.x === head.x && b.y === head.y);
-      // 上一帧刚被吃的苹果草丛本帧豁免，之后恢复正常冻结
+      // 1秒内刚被吃的苹果草丛豁免冻结
       const justAteHere = lastEatenPos && lastEatenPos.x === head.x && lastEatenPos.y === head.y;
       if (!isInvincible && isBush && !justAteHere) {
          this.score -= 1;
