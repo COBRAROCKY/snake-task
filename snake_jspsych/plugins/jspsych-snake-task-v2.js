@@ -127,7 +127,7 @@ var jsPsychSnakeTask = (function (jspsych) {
       this.GRID_SIZE = trial.grid_size;
       this.CANVAS_WIDTH = trial.canvas_width;
       this.CANVAS_HEIGHT = trial.canvas_height;
-      this.SPEED = 6; // Frames per second
+      this.SPEED = 8; // Frames per second
       
       // 实验设计: 20个灌木丛，每象限5个
       this.NUM_BUSHES_PER_QUADRANT = 5;
@@ -293,6 +293,26 @@ var jsPsychSnakeTask = (function (jspsych) {
       // 无敌机制：move阶段前2秒处于无敌状态
       this.invincibleUntil = 0;          // 无敌状态截止时间戳（0=不无敌）
       this.INVINCIBLE_DURATION = 2000;   // 无敌持续时长（毫秒）
+      
+      // 渲染与逻辑分离
+      this.renderInterval = 1000 / 30;   // 渲染目标 30fps
+      this.lastRenderTime = 0;           // 上次渲染时间戳
+      
+      // 分数浮动动画
+      this.scoreChangeStartY = 0;
+      
+      // 草丛预渲染缓存
+      this.bushCacheCanvas = null;
+      
+      // 蛇头旋转过渡
+      this._displayAngle = 0;
+      this._targetAngle = 0;
+      this._rotationStartTime = 0;
+      this.ROTATION_DURATION = 50;
+      
+      // HUD 脏帧
+      this._lastHUDRenderScore = undefined;
+      this._hudCacheCanvas = null;    // HUD 离屏缓存
     }
 
     start() {
@@ -700,6 +720,15 @@ var jsPsychSnakeTask = (function (jspsych) {
       this.bushLocations = [...this.allGridPoints];
       console.log(`[BUSH] Total bushes: ${this.bushLocations.length} (20 expected)`);
       
+      // 预渲染草丛到离屏 canvas（位置在整个试次中不变）
+      this.bushCacheCanvas = document.createElement('canvas');
+      this.bushCacheCanvas.width = this.CANVAS_WIDTH;
+      this.bushCacheCanvas.height = this.CANVAS_HEIGHT;
+      const cacheCtx = this.bushCacheCanvas.getContext('2d');
+      for (const bush of this.bushLocations) {
+        this.drawImageToCtx(cacheCtx, 'bush', bush.x, bush.y);
+      }
+      
       // 4. Place Target Foods (1, 2, or 4 apples)
       // 实验设计: 在随机选定的灌木丛上方出现苹果
       this.targetFoods = [];
@@ -892,7 +921,13 @@ var jsPsychSnakeTask = (function (jspsych) {
       // Prevent reversing direction
       const opposites = {'UP':'DOWN', 'DOWN':'UP', 'LEFT':'RIGHT', 'RIGHT':'LEFT'};
       if (opposites[newDir] !== this.direction) {
+        // 蛇头旋转过渡：记录旧角度和目标角度
+        const oldAngle = this._getDirectionAngle(this.direction);
         this.nextDirection = newDir; // Buffer the input
+        const newAngle = this._getDirectionAngle(newDir);
+        this._displayAngle = oldAngle;
+        this._targetAngle = newAngle;
+        this._rotationStartTime = performance.now();
         this._directionChanges++;
       }
       
@@ -1046,9 +1081,6 @@ var jsPsychSnakeTask = (function (jspsych) {
            this.checkCollisions();
         }
         
-        // Render every frame (or strictly on tick)
-        this.render();
-        
         // Check End Conditions
         if (this.targetFoods.length === 0) {
             // Level Complete
@@ -1056,6 +1088,13 @@ var jsPsychSnakeTask = (function (jspsych) {
             this.endTrial('completed');
             return;
         }
+      }
+      
+      // Render (at 30fps, independent of logic)
+      const renderDelta = timestamp - this.lastRenderTime;
+      if (renderDelta >= this.renderInterval) {
+        this.lastRenderTime = timestamp;
+        this.render();
       }
       
       // Check Trial Timeout
@@ -1270,10 +1309,9 @@ var jsPsychSnakeTask = (function (jspsych) {
       this.ctx.fillStyle = this.COLORS.background;
       this.ctx.fillRect(0, 0, this.CANVAS_WIDTH, this.CANVAS_HEIGHT);
       
-      // 1. Draw Bushes (All Phases)
-      // Python draws bushes at all 'potential' locations
-      for (let bush of this.bushLocations) {
-        this.drawImage('bush', bush.x, bush.y);
+      // 1. Draw Bushes (All Phases) - 从预渲染缓存拷贝（1次drawImage替代20次）
+      if (this.bushCacheCanvas) {
+        this.ctx.drawImage(this.bushCacheCanvas, 0, 0);
       }
       
       // 2. Draw Target Foods (Only in Show Food Phase and Reminder Phase)
@@ -1345,11 +1383,11 @@ var jsPsychSnakeTask = (function (jspsych) {
          const blinkPhase = isInvincible ? Math.floor(performance.now() / 150) % 2 : 0;
          
          if (!isInvincible || blinkPhase === 0) {
-           // Draw Body (2.2° × 4.4° rectangles)
+           // 先画身体
            for (let i = 1; i < this.snake.length; i++) {
              this.drawSnakeBody(this.snake[i].x, this.snake[i].y, i);
            }
-           // Draw Head (rotated based on direction)
+           // 再画蛇头（后画确保不被身体遮盖）
            this.drawSnakeHead(this.snake[0].x, this.snake[0].y);
          }
       }
@@ -1419,11 +1457,17 @@ var jsPsychSnakeTask = (function (jspsych) {
         const elapsed = performance.now() - this.scoreChangeTimer;
         if (elapsed < this.scoreChangeDuration) {
           const head = this.snake[0];
+          const progress = Math.min(1, elapsed / this.scoreChangeDuration);
+          const floatOffset = -20 * progress;     // 向上浮动 20px
+          const alpha = 1 - progress;              // 透明度 1→0
+          
           this.ctx.font = 'bold 24px Arial';
           this.ctx.fillStyle = this.scoreChangeColor || '#FFFFFF';
           this.ctx.textAlign = 'center';
-          // Display below the snake head (offset by GRID_SIZE + 10)
-          this.ctx.fillText(this.scoreChangeText, head.x + this.GRID_SIZE/2, head.y + this.GRID_SIZE + 20);
+          this.ctx.globalAlpha = alpha;
+          // Display below the snake head, floating upward
+          this.ctx.fillText(this.scoreChangeText, head.x + this.GRID_SIZE/2, (this.scoreChangeStartY || head.y) + this.GRID_SIZE + 20 + floatOffset);
+          this.ctx.globalAlpha = 1; // Restore
         } else {
           // Clear after duration
           this.scoreChangeText = null;
@@ -1437,6 +1481,35 @@ var jsPsychSnakeTask = (function (jspsych) {
       this.scoreChangeText = text;
       this.scoreChangeColor = color;
       this.scoreChangeTimer = performance.now();
+      this.scoreChangeStartY = this.snake[0].y; // 浮动起点
+    }
+    
+    // 通用绘制到指定 ctx（用于离屏canvas预渲染）
+    drawImageToCtx(ctx, key, x, y) {
+      let size = this.GRID_SIZE;
+      let drawX = x;
+      let drawY = y;
+      
+      if (key === 'bush') {
+        const bushScale = this.trial.bush_size || 1.0;
+        size = this.GRID_SIZE * bushScale;
+        drawX = x + (this.GRID_SIZE - size) / 2;
+        drawY = y + (this.GRID_SIZE - size) / 2;
+      } else if (key === 'apple' || key === 'grapes' || key === 'appleCore') {
+        const appleScale = (this.trial.apple_size !== undefined && this.trial.apple_size !== null)
+          ? this.trial.apple_size
+          : (this.trial.bush_size || 1.0);
+        size = this.GRID_SIZE * appleScale;
+        drawX = x + (this.GRID_SIZE - size) / 2;
+        drawY = y + (this.GRID_SIZE - size) / 2;
+      }
+      
+      if (this.loadedImages[key]) {
+        ctx.drawImage(this.loadedImages[key], drawX, drawY, size, size);
+      } else {
+        ctx.fillStyle = key === 'apple' ? 'red' : (key === 'snakeHead' ? '#4BB3FD' : 'gray');
+        ctx.fillRect(drawX, drawY, size, size);
+      }
     }
     
     drawImage(key, x, y) {
@@ -1490,13 +1563,29 @@ var jsPsychSnakeTask = (function (jspsych) {
     // RIGHT -> rotate 270°, LEFT -> rotate 90°, UP -> 180°, DOWN -> 0°
     // head_size parameter controls the size ratio (1.0 = GRID_SIZE, 1.5 = 50% larger)
     drawSnakeHead(x, y) {
-      const rotationMap = {
-        'UP': 180,
-        'DOWN': 0,
-        'LEFT': 90,
-        'RIGHT': 270
-      };
-      const angle = rotationMap[this.direction] || 0;
+      // 插值旋转：50ms 平滑过渡
+      let angle;
+      if (this._rotationStartTime > 0) {
+        const elapsed = performance.now() - this._rotationStartTime;
+        const progress = Math.min(1, elapsed / this.ROTATION_DURATION);
+        // 处理角度跨越（如 270→90 应该转 180°）
+        let diff = this._targetAngle - this._displayAngle;
+        if (Math.abs(diff) > 180) diff = diff > 0 ? diff - 360 : diff + 360;
+        this._displayAngle = this._displayAngle + diff * this._easeOutQuad(progress);
+        if (progress >= 1) {
+          this._displayAngle = this._targetAngle;
+          this._rotationStartTime = 0;
+        }
+        angle = this._displayAngle;
+      } else {
+        const rotationMap = {
+          'UP': 180,
+          'DOWN': 0,
+          'LEFT': 90,
+          'RIGHT': 270
+        };
+        angle = rotationMap[this.direction] || 0;
+      }
       
       // Get head size from parameter (default 1.0 = GRID_SIZE)
       const headScale = this.trial.head_size || 1.0;
@@ -1514,6 +1603,17 @@ var jsPsychSnakeTask = (function (jspsych) {
       this.ctx.rotate(angle * Math.PI / 180);
       this.ctx.drawImage(img, -headSize/2, -headSize/2, headSize, headSize);
       this.ctx.restore();
+    }
+    
+    // 方向→角度映射
+    _getDirectionAngle(dir) {
+      const map = { 'UP': 180, 'DOWN': 0, 'LEFT': 90, 'RIGHT': 270 };
+      return map[dir] || 0;
+    }
+    
+    // 缓出二次函数
+    _easeOutQuad(t) {
+      return 1 - (1 - t) * (1 - t);
     }
     
     // Draw snake body segment as continuous blue rectangle (2.2° width × 4.4° length)
@@ -1577,36 +1677,51 @@ var jsPsychSnakeTask = (function (jspsych) {
       const x = this.CANVAS_WIDTH - 80;
       const y = 80;
       
-      // Pie Chart Background
-      this.ctx.beginPath();
-      this.ctx.arc(x, y, radius, 0, Math.PI*2);
-      this.ctx.fillStyle = this.COLORS.pie_bg;
-      this.ctx.fill();
-      this.ctx.strokeStyle = this.COLORS.pie_border;
-      this.ctx.stroke();
-      
-      // Pie Fill
-      const percent = Math.min(1, Math.max(0, this.totalScore / this.trial.target_score));
-      if (percent > 0) {
-        this.ctx.beginPath();
-        this.ctx.moveTo(x, y);
-        // Arc: start at -PI/2 (12 o'clock), end at ...
-        this.ctx.arc(x, y, radius, -Math.PI/2, -Math.PI/2 + (Math.PI*2 * percent));
-        this.ctx.lineTo(x, y);
-        this.ctx.fillStyle = this.COLORS.pie_fill;
-        this.ctx.fill();
+      // 脏帧优化：仅在分数变化时重建离屏缓存
+      if (!this._hudCacheCanvas || this.totalScore !== this._lastHUDRenderScore) {
+        this._lastHUDRenderScore = this.totalScore;
+        
+        if (!this._hudCacheCanvas) {
+          this._hudCacheCanvas = document.createElement('canvas');
+          this._hudCacheCanvas.width = this.CANVAS_WIDTH;
+          this._hudCacheCanvas.height = this.CANVAS_HEIGHT;
+        }
+        const hudCtx = this._hudCacheCanvas.getContext('2d');
+        hudCtx.clearRect(0, 0, this.CANVAS_WIDTH, this.CANVAS_HEIGHT);
+        
+        // Pie Chart Background
+        hudCtx.beginPath();
+        hudCtx.arc(x, y, radius, 0, Math.PI*2);
+        hudCtx.fillStyle = this.COLORS.pie_bg;
+        hudCtx.fill();
+        hudCtx.strokeStyle = this.COLORS.pie_border;
+        hudCtx.stroke();
+        
+        // Pie Fill
+        const percent = Math.min(1, Math.max(0, this.totalScore / this.trial.target_score));
+        if (percent > 0) {
+          hudCtx.beginPath();
+          hudCtx.moveTo(x, y);
+          hudCtx.arc(x, y, radius, -Math.PI/2, -Math.PI/2 + (Math.PI*2 * percent));
+          hudCtx.lineTo(x, y);
+          hudCtx.fillStyle = this.COLORS.pie_fill;
+          hudCtx.fill();
+        }
+        
+        // Score Text
+        hudCtx.fillStyle = 'white';
+        hudCtx.font = '20px Arial';
+        hudCtx.textAlign = 'center';
+        hudCtx.textBaseline = 'middle';
+        hudCtx.fillText(this.totalScore, x, y);
+        
+        // Label
+        hudCtx.font = '14px Arial';
+        hudCtx.fillText("目标: " + this.trial.target_score, x, y + radius + 20);
       }
       
-      // Score Text
-      this.ctx.fillStyle = 'white';
-      this.ctx.font = '20px Arial';
-      this.ctx.textAlign = 'center';
-      this.ctx.textBaseline = 'middle';
-      this.ctx.fillText(this.totalScore, x, y);
-      
-      // Label
-      this.ctx.font = '14px Arial';
-      this.ctx.fillText("目标: " + this.trial.target_score, x, y + radius + 20);
+      // 每帧从缓存拷贝 HUD（1 次 drawImage 代替多次绘制调用）
+      this.ctx.drawImage(this._hudCacheCanvas, 0, 0);
     }
 
     playSound(key) {
