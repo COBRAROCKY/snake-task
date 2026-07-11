@@ -471,9 +471,8 @@ var jsPsychSnakeTask = (function (jspsych) {
       const pieExclusionY = 180; // 到这个y坐标为止排除
       
       // 定义四个象限的边界（留出边距和中心蛇的空间）
-      // 增大边距使草丛距离边界更远
-      const margin = this.GRID_SIZE * 3;
-      const centerExclusion = this.GRID_SIZE * 4; // 中心区域排除（蛇的位置）
+      const margin = this.GRID_SIZE * 2;         // 80px，草丛距边缘
+      const centerExclusion = this.GRID_SIZE * 2; // 80px，中心蛇区（蛇3节约120px，足够安全）
       
       const quadrantBounds = {
         1: { // 左上
