@@ -67,7 +67,7 @@ var jsPsychSnakeTask = (function (jspsych) {
       },
       target_score: {
         type: jspsych.ParameterType.INT,
-        default: 1000,
+        default: 2000,
         description: 'Score required to fill the pie chart'
       },
       current_total_score: {
